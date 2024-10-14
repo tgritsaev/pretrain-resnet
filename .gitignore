@@ -1,6 +1,7 @@
 lsdl-hw-2.zip
 data/
 wandb/
+checkpoints/
 
 # cluster
 run.sbatch

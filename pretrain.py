@@ -10,6 +10,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
+from torchvision.utils import make_grid
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.functional as F
 
@@ -66,6 +67,7 @@ parser.add_argument("--ft-epochs", default=1, type=int)
 parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
 parser.add_argument("-g", "--gamma", default=0.95, type=float)
+parser.add_argument("--weight-decay", default=5e-4, type=float)
 parser.add_argument("-f", "--ft-learning-rate", default=1e-4, type=float)
 
 parser.add_argument("-n", "--num-workers", default=8, type=int)
@@ -102,6 +104,7 @@ pt_optimizer = torch.optim.SGD(
     [v for k, v in model.named_parameters() if k != "fc"] + list(pretrain_head.parameters()),
     lr=args.pt_learning_rate,
     momentum=0.9,
+    weight_decay=args.weight_decay,
 )
 pt_scheduler = torch.optim.lr_scheduler.ExponentialLR(pt_optimizer, gamma=args.gamma)
 
@@ -133,9 +136,14 @@ for epoch in trange(args.pretrain_epochs):
         
         pt_total_steps += 1
         
-        if i > 0 and i % 10 == 0:
+        if i > 0 and i % 100 == 0:
             wandb.log({"train_loss": loss.item()}, step=pt_total_steps)
-    
+            
+            log_images_n = 4
+            grid = make_grid(batch[:log_images_n], nrow=log_images_n)
+            grid_np = grid.permute(1, 2, 0).cpu().numpy()
+            wandb.log({"rotations": [wandb.Image(grid_np, caption=f"Predictions: {rotation_preds.argmax(1)[:log_images_n]}")]}, step=pt_total_steps)
+        
     pt_scheduler.step()
     wandb.log({"pt_lr": pt_scheduler.get_last_lr()[0]}, step=pt_total_steps)
     torch.save(
@@ -149,7 +157,8 @@ for epoch in trange(args.pretrain_epochs):
        
     ft_model = models.resnet18(num_classes=10)
     ft_model.load_state_dict(model.state_dict())
-    ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate, momentum=0.9)
+    ft_model = ft_model.to(device)
+    ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate, momentum=0.9, weight_decay=args.weight_decay)
     ft_model.train()
     for (batch, target) in ft_dataloader:
         pt_optimizer.zero_grad()
@@ -164,15 +173,21 @@ for epoch in trange(args.pretrain_epochs):
     correct_pred_cnt = 0
     with torch.no_grad():
         for (batch, target) in ft_dataloader:
-            class_preds = model(batch.to(device))
+            class_preds = ft_model(batch.to(device))
             correct_pred_cnt += torch.sum(class_preds.argmax(-1) == target.to(device))
-            
+    
+        log_images_n = 8
+        grid = make_grid(batch[:log_images_n], nrow=log_images_n)
+        grid_np = grid.permute(1, 2, 0).cpu().numpy()
+        class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
+        wandb.log({"test_images": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, step=pt_total_steps)    
+        
     wandb.log({"ft_accuracy": correct_pred_cnt / len(ft_dataset)}, step=pt_total_steps) 
     
     test_preds = []
     with torch.no_grad():
         for i, image in enumerate(test_images):
-            pred_idx = model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
+            pred_idx = ft_model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
             test_preds.append((f"{i}.jpg", CLASS_NAMES[pred_idx]))
             
     with open(f"{save_dir}/test-{epoch}.csv", mode='w', newline='') as file:
