@@ -1,4 +1,4 @@
-<!-- Homework 2, Large Scale Deep Learning 2024, CUB  -->
+# Homework 2, Large Scale Deep Learning 2024, CUB 
 
 This repository is a solution for the 2-nd homework from the LSDL 2024 Course taught at CUB. Throughout this howework I pretrained ResNet-18 following ["UNSUPERVISED REPRESENTATION LEARNING BY PREDICTING IMAGE ROTATIONS"](https://arxiv.org/abs/1803.07728) and tested it on a classification task.
 
