@@ -22,13 +22,13 @@ class PretrainDataset(Dataset):
         self.len = len(os.listdir(path)) if not args.debug else cut
         angles = [0, 90, 180, 270]
         # Load the dataset on Disk
-        imgs = []
+        tensor_imgs = []
         for i in range(self.len):
             with Image.open(f"{self.path}/{i + 1}.jpg") as img:
-                imgs.append(img)
+                tensor_imgs.append(transforms.ToTensor()(img))
         self.rotated_tensor_imgs = [
-            torch.stack([F.rotate(transforms.ToTensor()(img), angle) for angle in angles])
-            for img in imgs[:cut]
+            torch.stack([F.rotate(tensor_img, angle) for angle in angles])
+            for tensor_img in tensor_imgs[:cut]
         ]
         
     def __len__(self):
