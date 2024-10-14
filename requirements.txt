@@ -2,6 +2,7 @@ numpy==1.26.1
 torch==2.4.1
 torchvision==0.19.1
 
+kaggle
 pillow==10.4.0
 wandb
 tqdm

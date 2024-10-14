@@ -1,3 +1,7 @@
 lsdl-hw-2.zip
 data/
 wandb/
+
+# cluster
+run.sbatch
+logs/

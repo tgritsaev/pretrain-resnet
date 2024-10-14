@@ -10,17 +10,17 @@ This repository is a solution for the 2-nd homework from the LSDL 2024 Course ta
 
 ## Reproducibility
 
-* To download and unzip data, make sure you set up `kaggle.json` and joined the [competition](https://www.kaggle.com/competitions/lsdl-hw-2):
-```bash
-https://www.kaggle.com/competitions/lsdl-hw-2
-unzip lsdl-hw-2.zip
-```
-
 * Setup environment:
 ```bash
 conda create -n cv-pretrain python=3.10
 conda activate cv-pretrain
 pip install -r requirements.txt
+```
+
+* Download and unzip data, make sure you set up `kaggle.json` and joined the [competition](https://www.kaggle.com/competitions/lsdl-hw-2):
+```bash
+kaggle competitions download -c lsdl-hw-2
+unzip lsdl-hw-2.zip
 ```
 
 * Run the next to reproduce the final solution:

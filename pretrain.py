@@ -3,20 +3,15 @@ import csv
 import time
 import os
 import wandb
-import random
 from tqdm import trange
 
 from PIL import Image
-
-import numpy as np
 
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.functional as F
-
-import sys
 
 
 class PretrainDataset(Dataset):
@@ -27,7 +22,10 @@ class PretrainDataset(Dataset):
         self.len = len(os.listdir(path)) if not args.debug else cut
         angles = [0, 90, 180, 270]
         # Load the dataset on Disk
-        imgs = [Image.open(f"{self.path}/{i + 1}.jpg") for i in range(self.len)]
+        imgs = []
+        for i in range(self.len):
+            with Image.open(f"{self.path}/{i + 1}.jpg") as img:
+                imgs.append(img)
         self.rotated_tensor_imgs = [
             torch.stack([F.rotate(transforms.ToTensor()(img), angle) for angle in angles])
             for img in imgs[:cut]
@@ -48,7 +46,8 @@ class FineTuningDataset(Dataset):
         self.tensor_imgs = []
         for i, class_name in enumerate(CLASS_NAMES):
             for fname in os.listdir(f"{path}/{class_name}"):
-                self.tensor_imgs.append(transforms.ToTensor()(Image.open(f"{self.path}/{class_name}/{fname}")))
+                with Image.open(f"{self.path}/{class_name}/{fname}") as img:
+                    self.tensor_imgs.append(transforms.ToTensor()(img))
                 self.targets.append(i)
                 
         self.len = len(self.targets)
@@ -113,7 +112,10 @@ ft_dataset = FineTuningDataset("data/train/labeled")
 ft_dataloader = DataLoader(ft_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
 test_path = "data/test"
-test_images = [transforms.ToTensor()(Image.open(f"{test_path}/{i}.jpg")) for i in range(len(os.listdir(test_path)))]
+test_images = []
+for i in range(len(os.listdir(test_path))):
+    with Image.open(f"{test_path}/{i}.jpg") as img:
+        test_images.append(transforms.ToTensor()(img))
 
 pt_total_steps = 0
 
@@ -183,6 +185,3 @@ for epoch in trange(args.pretrain_epochs):
         writer.writerows(test_preds)
     
     print(f"Spent time on {i} epoch: {time.strftime('%H:%M:%S', time.gmtime(time.time() - begin_epoch_time))}")
-        
-# # ft_dataset = 
-# # test_dataset = 
