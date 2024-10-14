@@ -19,30 +19,6 @@ import torchvision.transforms.functional as F
 import sys
 
 
-def total_size(o, handlers={}):
-    """Calculate the total memory size of an object including all nested objects."""
-    seen = set()  # To track objects that are already counted
-
-    def sizeof(o):
-        if id(o) in seen:  # Avoid re-counting the same object
-            return 0
-        seen.add(id(o))
-        
-        size = sys.getsizeof(o)
-        
-        if isinstance(o, dict):
-            size += sum(sizeof(k) + sizeof(v) for k, v in o.items())
-        elif isinstance(o, (list, tuple, set)):
-            size += sum(sizeof(i) for i in o)
-        elif hasattr(o, '__dict__'):
-            size += sizeof(vars(o))
-        elif hasattr(o, '__slots__'):
-            size += sum(sizeof(getattr(o, s)) for s in o.__slots__ if hasattr(o, s))
-
-        return size
-
-    return sizeof(o)
-
 class PretrainDataset(Dataset):
     
     def __init__(self, path):
