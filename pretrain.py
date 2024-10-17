@@ -176,20 +176,21 @@ for epoch in trange(args.pretrain_epochs):
     model.train()
     for i, batch in enumerate(pt_dataloader):
         pt_optimizer.zero_grad()
-        _ = model(torch.flatten(batch, 0, 1).to(device))
+        batch = torch.flatten(batch, 0, 1).to(device)
+        _ = model(batch)
         rotation_preds = pretrain_head(activation["avgpool"].squeeze())
-        target = torch.arange(batch.shape[0] * 4, device=device) % 4
+        target = torch.arange(batch.shape[0], device=device) % 4
         loss = ce_loss(rotation_preds, target)
         loss.backward()
         pt_optimizer.step()
         
         pt_total_steps += 1
         
-        if i > 0 and i % 40 == 0:
+        if pt_total_steps > 0 and pt_total_steps % 40 == 0:
             logger.log({"train_loss": loss.item()}, pt_total_steps)
             
             log_images_n = 4
-            denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+            denormalized_images = [DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]]
             grid = make_grid(denormalized_images, nrow=log_images_n)
             grid_np = grid.permute(1, 2, 0).cpu().numpy()
             logger.log({"rotations": [wandb.Image(grid_np, caption=f"Predictions: {rotation_preds.argmax(1)[:log_images_n]}")]}, pt_total_steps, True) 
@@ -233,7 +234,7 @@ for epoch in trange(args.pretrain_epochs):
                     correct_pred_cnt += torch.sum(class_preds.argmax(-1) == target.to(device))
             
                 log_images_n = 8
-                denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+                denormalized_images = [DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]]
                 grid = make_grid(denormalized_images, nrow=log_images_n)
                 grid_np = grid.permute(1, 2, 0).cpu().numpy()
                 class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
