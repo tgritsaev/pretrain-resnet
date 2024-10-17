@@ -2,6 +2,7 @@ import argparse
 import csv
 import time
 import os
+import glob
 import wandb
 from tqdm import trange
 
@@ -48,13 +49,13 @@ class FineTuningDataset(Dataset):
         for i, class_name in enumerate(CLASS_NAMES):
             for fname in os.listdir(f"{path}/{class_name}"):
                 with Image.open(f"{self.path}/{class_name}/{fname}") as img:
-                    tensor_imgs.append(transforms.ToTensor()(img))
+                    tensor_imgs.append(TRANSFORM(img))
                 targets.append(i)
         
         if args.debug:
             self.targets = []
             self.tensor_imgs = []
-            mask = torch.rand(len(targets)) < 0.1
+            mask = torch.rand(len(targets)) < 0.01
             for i in range(len(targets)):
                 if mask[i]:
                     self.targets.append(targets[i])
@@ -63,6 +64,7 @@ class FineTuningDataset(Dataset):
             self.targets = targets
             self.tensor_imgs = tensor_imgs
         self.len = len(self.targets)        
+        print(f"Fine-tuning dataset size: {self.len}")
         
     def __len__(self):
         return self.len
@@ -98,7 +100,7 @@ parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
 parser.add_argument("-g", "--gamma", default=0.95, type=float)
 parser.add_argument("--weight-decay", default=5e-4, type=float)
-parser.add_argument("-f", "--ft-learning-rate", default=1e-3, type=float)
+parser.add_argument("-f", "--ft-learning-rate", default=1e-2, type=float)
 
 parser.add_argument("-n", "--num-workers", default=8, type=int)
 parser.add_argument("-d", "--debug", action="store_true")
@@ -116,7 +118,6 @@ DENORMALIZE_TRANSFORM = transforms.Normalize(
     mean=[-m/s for m, s in zip(mean_stats, std_stats)],  # Subtract mean / std
     std=[1/s for s in std_stats]                   # Divide by std
 )
-
 
 run_name = f"bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.gamma}-ftlr={args.ft_learning_rate}"
 logger = Logger(run_name)
@@ -141,9 +142,13 @@ ce_loss = nn.CrossEntropyLoss()
 start_time = time.time()
 save_dir = f"checkpoints/{run_name}"
 os.makedirs(save_dir, exist_ok=True)
+files = glob.glob(f"{save_dir}/*")
+for f in files:
+    os.remove(f)
+
 
 pt_optimizer = torch.optim.SGD(
-    [v for k, v in model.named_parameters() if k != "fc"] + list(pretrain_head.parameters()),
+    [v for k, v in model.named_parameters() if not k.startswith("fc.")] + list(pretrain_head.parameters()),
     lr=args.pt_learning_rate,
     momentum=0.9,
     weight_decay=args.weight_decay,
@@ -186,8 +191,8 @@ for epoch in trange(args.pretrain_epochs):
             grid = make_grid(denormalized_images, nrow=log_images_n)
             grid_np = grid.permute(1, 2, 0).cpu().numpy()
             logger.log({"rotations": [wandb.Image(grid_np, caption=f"Predictions: {rotation_preds.argmax(1)[:log_images_n]}")]}, pt_total_steps, True) 
-    pt_scheduler.step()
     logger.log({"pt_lr": pt_scheduler.get_last_lr()[0]}, pt_total_steps)
+    pt_scheduler.step()
     torch.save(
         {    
             'model_state_dict': model.state_dict(),
@@ -198,58 +203,62 @@ for epoch in trange(args.pretrain_epochs):
     )
     
     is_final_epoch = epoch + 1 == args.pretrain_epochs
-    ft_model = models.resnet18(num_classes=10)
-    ft_model.load_state_dict(model.state_dict())
-    ft_model = ft_model.to(device)
-    ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate, momentum=0.9, weight_decay=args.weight_decay)
-    ft_scheduler = torch.optim.lr_scheduler.ExponentialLR(ft_optimizer, gamma=args.gamma)
-    for ft_epoch in range(args.ft_epochs if is_final_epoch else 1):
-        ft_model.train()
-        for (batch, target) in ft_dataloader:
-            pt_optimizer.zero_grad()
-            
-            class_preds = ft_model(batch.to(device))
-            
-            loss = ce_loss(class_preds, target.to(device))
-            loss.backward()
-            ft_optimizer.step()
-        ft_scheduler.step()
-            
-        ft_model.eval()
-        correct_pred_cnt = 0
-        with torch.no_grad():
+    for ftlr_multiplier in [1, 0.1, 0.01]:
+        ft_model = models.resnet18(num_classes=10)
+        # ft_model.load_state_dict(model.state_dict())
+        ft_model = ft_model.to(device)
+        ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate * ftlr_multiplier, momentum=0.9, weight_decay=args.weight_decay)
+        ft_scheduler = torch.optim.lr_scheduler.ExponentialLR(ft_optimizer, gamma=args.gamma)
+        for ft_epoch in range(args.ft_epochs if is_final_epoch else 1):
+            ft_model.train()
             for (batch, target) in ft_dataloader:
+                ft_optimizer.zero_grad()
+                
                 class_preds = ft_model(batch.to(device))
-                correct_pred_cnt += torch.sum(class_preds.argmax(-1) == target.to(device))
-        
-            log_images_n = 8
-            grid = make_grid(batch[:log_images_n], nrow=log_images_n)
-            grid_np = grid.permute(1, 2, 0).cpu().numpy()
-            class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
+                
+                loss = ce_loss(class_preds, target.to(device))
+                loss.backward()
+                ft_optimizer.step()
             if is_final_epoch:
-                logger.log({"final_test_images": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, ft_epoch, True)  
+                logger.log({"final_ft_lr": ft_scheduler.get_last_lr()[0]}, ft_epoch)
+            ft_scheduler.step()
+                
+            ft_model.eval()
+            correct_pred_cnt = 0
+            with torch.no_grad():
+                for (batch, target) in ft_dataloader:
+                    class_preds = ft_model(batch.to(device))
+                    correct_pred_cnt += torch.sum(class_preds.argmax(-1) == target.to(device))
+            
+                log_images_n = 8
+                denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+                grid = make_grid(denormalized_images, nrow=log_images_n)
+                grid_np = grid.permute(1, 2, 0).cpu().numpy()
+                class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
+                if is_final_epoch:
+                    logger.log({f"final_test_images_ftlrmul={ftlr_multiplier}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, ft_epoch, True)  
+                else:
+                    logger.log({f"test_images_ftlrmul={ftlr_multiplier}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, pt_total_steps, True)  
+                
+            if is_final_epoch:
+                logger.log({f"final_ft_accuracy_ftlrmul={ftlr_multiplier}": correct_pred_cnt / len(ft_dataset)}, ft_epoch)
             else:
-                logger.log({"test_images": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, pt_total_steps, True)  
+                logger.log({f"ft_accuracy_ftlrmul={ftlr_multiplier}": correct_pred_cnt / len(ft_dataset)}, pt_total_steps)
             
-        if is_final_epoch:
-            logger.log({"final_ft_accuracy": correct_pred_cnt / len(ft_dataset)}, ft_epoch)
-        else:
-            logger.log({"ft_accuracy": correct_pred_cnt / len(ft_dataset)}, pt_total_steps)
-        
-        test_preds = []
-        with torch.no_grad():
-            for i, image in enumerate(test_images):
-                pred_idx = ft_model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
-                test_preds.append((f"{i}.jpg", CLASS_NAMES[pred_idx]))
-        
-        fname = f"{save_dir}/" + (f"final-test-{ft_epoch}.csv" if is_final_epoch else f"test-{epoch}.csv")
-        with open(fname, mode='w', newline='') as fout:
-            writer = csv.writer(fout)
+            test_preds = []
+            with torch.no_grad():
+                for i, image in enumerate(test_images):
+                    pred_idx = ft_model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
+                    test_preds.append((f"{i}.jpg", CLASS_NAMES[pred_idx]))
             
-            # Write the header
-            writer.writerow(['id', 'class'])
-            
-            # Write the data rows
-            writer.writerows(test_preds)
+            fname = f"{save_dir}/" + (f"final_test_{ft_epoch}" if is_final_epoch else f"test_{epoch}") + f"_ftlrmul={ftlr_multiplier}.csv"
+            with open(fname, mode='w', newline='') as fout:
+                writer = csv.writer(fout)
+                
+                # Write the header
+                writer.writerow(['id', 'class'])
+                
+                # Write the data rows
+                writer.writerows(test_preds)
     
     print(f"Spent time on {i} epoch: {time.strftime('%H:%M:%S', time.gmtime(time.time() - begin_epoch_time))}")
