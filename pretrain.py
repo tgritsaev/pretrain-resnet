@@ -98,9 +98,10 @@ parser.add_argument("--ft-epochs", default=3, type=int)
 
 parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
-parser.add_argument("-g", "--gamma", default=0.95, type=float)
-parser.add_argument("--weight-decay", default=5e-4, type=float)
+parser.add_argument("-g", "--pt-gamma", default=0.95, type=float)
 parser.add_argument("-f", "--ft-learning-rate", default=1e-2, type=float)
+parser.add_argument("-g", "--ft-gamma", default=0.99, type=float)
+parser.add_argument("--weight-decay", default=5e-4, type=float)
 
 parser.add_argument("-n", "--num-workers", default=8, type=int)
 parser.add_argument("-d", "--debug", action="store_true")
@@ -119,7 +120,7 @@ DENORMALIZE_TRANSFORM = transforms.Normalize(
     std=[1/s for s in std_stats]                   # Divide by std
 )
 
-run_name = f"bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.gamma}-ftlr={args.ft_learning_rate}"
+run_name = f"bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.pt_gamma}-ftlr={args.ft_learning_rate}-g={args.ft_gamma}"
 logger = Logger(run_name)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() and not args.cpu_only else "cpu")
@@ -153,7 +154,7 @@ pt_optimizer = torch.optim.SGD(
     momentum=0.9,
     weight_decay=args.weight_decay,
 )
-pt_scheduler = torch.optim.lr_scheduler.ExponentialLR(pt_optimizer, gamma=args.gamma)
+pt_scheduler = torch.optim.lr_scheduler.ExponentialLR(pt_optimizer, gamma=args.pt_gamma)
 
 pt_dataset = PretrainDataset("data/train/unlabeled")
 pt_dataloader = DataLoader(pt_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
@@ -208,7 +209,7 @@ for epoch in trange(args.pretrain_epochs):
         # ft_model.load_state_dict(model.state_dict())
         ft_model = ft_model.to(device)
         ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate * ftlr_multiplier, momentum=0.9, weight_decay=args.weight_decay)
-        ft_scheduler = torch.optim.lr_scheduler.ExponentialLR(ft_optimizer, gamma=args.gamma)
+        ft_scheduler = torch.optim.lr_scheduler.ExponentialLR(ft_optimizer, gamma=args.ft_gamma)
         for ft_epoch in range(args.ft_epochs if is_final_epoch else 1):
             ft_model.train()
             for (batch, target) in ft_dataloader:
