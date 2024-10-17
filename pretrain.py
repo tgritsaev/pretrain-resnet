@@ -226,7 +226,6 @@ for epoch in trange(args.pretrain_epochs):
         }, 
         f"{save_dir}/pt-{epoch}.pt"
     )
-    pt_dataset._reset_data()
     
     is_final_epoch = epoch + 1 == args.pretrain_epochs
     for ftlr_multiplier in [1, 0.1, 0.01]:
@@ -247,7 +246,6 @@ for epoch in trange(args.pretrain_epochs):
             if is_final_epoch:
                 logger.log({"final_ft_lr": ft_scheduler.get_last_lr()[0]}, ft_epoch)
             ft_scheduler.step()
-            ft_train_dataset._reset_data()
                 
             ft_model.eval()
             correct_pred_cnt = 0
