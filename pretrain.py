@@ -20,30 +20,30 @@ class PretrainDataset(Dataset):
     
     def __init__(self, path, transforms_set):
         super().__init__()
-        
         self.path = path
-        self.cut = None if not args.debug else 128
-        self.len = len(os.listdir(path)) if not args.debug else self.cut
         self.transforms_set = transforms_set
-        # Load the dataset on Disk
-        self._reset_data()
-    
-    def _reset_data(self):
-        angles = [0, 90, 180, 270]
-        tensor_imgs = []
-        for i in range(self.len):
-            with Image.open(f"{self.path}/{i + 1}.jpg") as img:
-                tensor_imgs.append(self.transforms_set(img))
-        self.rotated_tensor_imgs = [
-            torch.stack([F.rotate(tensor_img, angle) for angle in angles])
-            for tensor_img in tensor_imgs[:self.cut]
-        ]
+        self.angles = [0, 90, 180, 270]
+        
+        # Get list of image file paths
+        image_files = os.listdir(path)
+        if args.debug:
+            image_files = image_files[:128]
+        self.image_paths = [os.path.join(self.path, f"{i + 1}.jpg") for i in range(len(image_files))]
+        self.len = len(self.image_paths)
         
     def __len__(self):
         return self.len
     
     def __getitem__(self, idx):
-        return self.rotated_tensor_imgs[idx]
+        # Open the image
+        with Image.open(self.image_paths[idx]) as img:
+            img = img.convert('RGB')
+            # Apply transformations
+            transformed_img = self.transforms_set(img)
+            # Rotate the image by the specified angles and stack
+            rotated_tensor_imgs = torch.stack([F.rotate(transformed_img, angle) for angle in self.angles])
+        return rotated_tensor_imgs
+    
     
 class FineTuningDataset(Dataset):
     
@@ -51,36 +51,36 @@ class FineTuningDataset(Dataset):
         super().__init__()
         self.path = path
         self.transforms_set = transforms_set
-        self._reset_data()
-        # print(f"Fine-tuning dataset size: {self.len}")
-    
-    def _reset_data(self):
-        targets = []
-        tensor_imgs = []
+        
+        self.image_paths = []
+        self.targets = []
         for i, class_name in enumerate(CLASS_NAMES):
-            for fname in os.listdir(f"{self.path}/{class_name}"):
-                with Image.open(f"{self.path}/{class_name}/{fname}") as img:
-                    tensor_imgs.append(self.transforms_set(img))
-                targets.append(i)
+            class_dir = os.path.join(self.path, class_name)
+            for fname in os.listdir(class_dir):
+                self.image_paths.append(os.path.join(class_dir, fname))
+                self.targets.append(i)
         
         if args.debug:
-            self.targets = []
-            self.tensor_imgs = []
-            mask = torch.rand(len(targets)) < 0.01
-            for i in range(len(targets)):
-                if mask[i]:
-                    self.targets.append(targets[i])
-                    self.tensor_imgs.append(tensor_imgs[i])
-        else:
-            self.targets = targets
-            self.tensor_imgs = tensor_imgs
-        self.len = len(self.targets)       
+            # Select a small subset of data for debugging
+            mask = torch.rand(len(self.targets)) < 0.01
+            self.image_paths = [self.image_paths[i] for i in range(len(self.targets)) if mask[i]]
+            self.targets = [self.targets[i] for i in range(len(self.targets)) if mask[i]]
+        
+        self.len = len(self.targets)
+        print(f"Fine-tuning dataset size: {self.len}")
         
     def __len__(self):
         return self.len
     
     def __getitem__(self, idx):
-        return self.tensor_imgs[idx], self.targets[idx]
+        # Open the image
+        with Image.open(self.image_paths[idx]) as img:
+            img = img.convert('RGB')
+            # Apply transformations
+            img = self.transforms_set(img)
+        target = self.targets[idx]
+        return img, target
+
 
 
 class Logger:
@@ -140,7 +140,7 @@ denormalize_transform = transforms.Normalize(
     std=[1/s for s in std_stats]                   # Divide by std
 )
 
-run_name = f"AUGM--bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.pt_gamma}-ftlr={args.ft_learning_rate}-g={args.ft_gamma}"
+run_name = f"AUGM--pt-epochs={args.pretrain_epochs}--bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.pt_gamma}-ftlr={args.ft_learning_rate}-g={args.ft_gamma}"
 logger = Logger(run_name)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() and not args.cpu_only else "cpu")
@@ -177,13 +177,13 @@ pt_optimizer = torch.optim.SGD(
 pt_scheduler = torch.optim.lr_scheduler.ExponentialLR(pt_optimizer, gamma=args.pt_gamma)
 
 pt_dataset = PretrainDataset("data/train/unlabeled", train_transforms)
-pt_dataloader = DataLoader(pt_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+pt_dataloader = DataLoader(pt_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
 
 ft_train_dataset = FineTuningDataset("data/train/labeled", train_transforms)
-ft_train_dataloader = DataLoader(ft_train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+ft_train_dataloader = DataLoader(ft_train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
 
 ft_test_dataset = FineTuningDataset("data/train/labeled", test_transforms)
-ft_test_dataloader = DataLoader(ft_test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+ft_test_dataloader = DataLoader(ft_test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
 test_path = "data/test"
 test_images = []
@@ -263,12 +263,17 @@ for epoch in trange(args.pretrain_epochs):
                 grid_np = grid.permute(1, 2, 0).cpu().numpy()
                 class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
                 if is_final_epoch:
-                    logger.log({f"final_test_images_ftlrmul={ftlr_multiplier}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, ft_epoch, True)  
+                    logger.log({
+                        f"final_test_images_ftlrmul={ftlr_multiplier}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, 
+                        pt_total_steps, 
+                        True,
+                    )  
+                    pt_total_steps += 1
                 elif ft_epoch == 2:
                     logger.log({f"test_images_ftlrmul={ftlr_multiplier}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, pt_total_steps, True)  
                 
             if is_final_epoch:
-                logger.log({f"final_ft_accuracy_ftlrmul={ftlr_multiplier}": correct_pred_cnt / len(ft_train_dataset)}, ft_epoch)
+                logger.log({f"final_ft_accuracy_ftlrmul={ftlr_multiplier}": correct_pred_cnt / len(ft_train_dataset)}, pt_total_steps)
             elif ft_epoch == 2:
                 logger.log({f"ft_accuracy_ftlrmul={ftlr_multiplier}": correct_pred_cnt / len(ft_train_dataset)}, pt_total_steps)
             
