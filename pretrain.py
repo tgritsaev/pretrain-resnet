@@ -26,7 +26,7 @@ class PretrainDataset(Dataset):
         tensor_imgs = []
         for i in range(self.len):
             with Image.open(f"{self.path}/{i + 1}.jpg") as img:
-                tensor_imgs.append(transforms.ToTensor()(img))
+                tensor_imgs.append(TRANSFORM(img))
         self.rotated_tensor_imgs = [
             torch.stack([F.rotate(tensor_img, angle) for angle in angles])
             for tensor_img in tensor_imgs[:cut]
@@ -102,10 +102,21 @@ parser.add_argument("-f", "--ft-learning-rate", default=1e-3, type=float)
 
 parser.add_argument("-n", "--num-workers", default=8, type=int)
 parser.add_argument("-d", "--debug", action="store_true")
-parser.add_argument("-c", "--cpu_only", action="store_true")
+parser.add_argument("-c", "--cpu-only", action="store_true")
 args = parser.parse_args()
 
 CLASS_NAMES = sorted(os.listdir("data/train/labeled"))
+mean_stats = [0.485, 0.456, 0.406]
+std_stats = [0.229, 0.224, 0.225]
+TRANSFORM = transforms.Compose([
+    transforms.ToTensor(),  # Converts image to PyTorch tensor with values in [0, 1]
+    transforms.Normalize(mean=mean_stats, std=std_stats)  # Normalize the tensor
+])
+DENORMALIZE_TRANSFORM = transforms.Normalize(
+    mean=[-m/s for m, s in zip(mean_stats, std_stats)],  # Subtract mean / std
+    std=[1/s for s in std_stats]                   # Divide by std
+)
+
 
 run_name = f"bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.gamma}-ftlr={args.ft_learning_rate}"
 logger = Logger(run_name)
@@ -149,7 +160,7 @@ test_path = "data/test"
 test_images = []
 for i in range(len(os.listdir(test_path))):
     with Image.open(f"{test_path}/{i}.jpg") as img:
-        test_images.append(transforms.ToTensor()(img))
+        test_images.append(TRANSFORM(img))
 
 pt_total_steps = 0
 
@@ -167,11 +178,12 @@ for epoch in trange(args.pretrain_epochs):
         
         pt_total_steps += 1
         
-        if i > 0 and i % 100 == 0:
+        if i > 0 and i % 40 == 0:
             logger.log({"train_loss": loss.item()}, pt_total_steps)
             
             log_images_n = 4
-            grid = make_grid(batch[:log_images_n], nrow=log_images_n)
+            denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+            grid = make_grid(denormalized_images, nrow=log_images_n)
             grid_np = grid.permute(1, 2, 0).cpu().numpy()
             logger.log({"rotations": [wandb.Image(grid_np, caption=f"Predictions: {rotation_preds.argmax(1)[:log_images_n]}")]}, pt_total_steps, True) 
     pt_scheduler.step()
