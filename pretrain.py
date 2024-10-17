@@ -94,7 +94,7 @@ class Logger:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--pretrain-epochs", default=100, type=int)
-parser.add_argument("--ft-epochs", default=3, type=int)
+parser.add_argument("--ft-epochs", default=300, type=int)
 
 parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
