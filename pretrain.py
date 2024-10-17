@@ -127,6 +127,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() and not args.cpu_onl
 
 model = models.resnet18(num_classes=10).to(device)
 pretrain_head = nn.Linear(512, 4).to(device)
+pretrain_head.train()
 
 activation = {}
 def get_activation(name):
@@ -147,13 +148,13 @@ files = glob.glob(f"{save_dir}/*")
 for f in files:
     os.remove(f)
 
-
 pt_optimizer = torch.optim.SGD(
     [v for k, v in model.named_parameters() if not k.startswith("fc.")] + list(pretrain_head.parameters()),
     lr=args.pt_learning_rate,
     momentum=0.9,
     weight_decay=args.weight_decay,
 )
+print()
 pt_scheduler = torch.optim.lr_scheduler.ExponentialLR(pt_optimizer, gamma=args.pt_gamma)
 
 pt_dataset = PretrainDataset("data/train/unlabeled")
