@@ -26,7 +26,7 @@ class PretrainDataset(Dataset):
         tensor_imgs = []
         for i in range(self.len):
             with Image.open(f"{self.path}/{i + 1}.jpg") as img:
-                tensor_imgs.append(transforms.ToTensor()(img))
+                tensor_imgs.append(TRANSFORM(img))
         self.rotated_tensor_imgs = [
             torch.stack([F.rotate(tensor_img, angle) for angle in angles])
             for tensor_img in tensor_imgs[:cut]
@@ -48,7 +48,7 @@ class FineTuningDataset(Dataset):
         for i, class_name in enumerate(CLASS_NAMES):
             for fname in os.listdir(f"{path}/{class_name}"):
                 with Image.open(f"{self.path}/{class_name}/{fname}") as img:
-                    self.tensor_imgs.append(transforms.ToTensor()(img))
+                    self.tensor_imgs.append(TRANSFORM(img))
                 self.targets.append(i)
                 
         self.len = len(self.targets)
@@ -68,16 +68,27 @@ parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
 parser.add_argument("-g", "--gamma", default=0.95, type=float)
 parser.add_argument("--weight-decay", default=5e-4, type=float)
-parser.add_argument("-f", "--ft-learning-rate", default=1e-4, type=float)
+parser.add_argument("-f", "--ft-learning-rate", default=1e-3, type=float)
 
 parser.add_argument("-n", "--num-workers", default=8, type=int)
 parser.add_argument("-d", "--debug", action="store_true")
-parser.add_argument("-c", "--cpu_only", action="store_true")
+parser.add_argument("-c", "--cpu-only", action="store_true")
 args = parser.parse_args()
 
 CLASS_NAMES = sorted(os.listdir("data/train/labeled"))
+mean_stats = [0.485, 0.456, 0.406]
+std_stats = [0.229, 0.224, 0.225]
+TRANSFORM = transforms.Compose([
+    transforms.ToTensor(),  # Converts image to PyTorch tensor with values in [0, 1]
+    transforms.Normalize(mean=mean_stats, std=std_stats)  # Normalize the tensor
+])
+DENORMALIZE_TRANSFORM = transforms.Normalize(
+    mean=[-m/s for m, s in zip(mean_stats, std_stats)],  # Subtract mean / std
+    std=[1/s for s in std_stats]                   # Divide by std
+)
 
-run_name = f"bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.gamma}-ftlr={args.ft_learning_rate}"
+
+run_name = f"FIXED-NORM--bs={args.batch_size}-ptlr={args.pt_learning_rate}-g={args.gamma}-ftlr={args.ft_learning_rate}"
 wandb.init(project="Pretrain ResNet-18, HW-2. LSDL 2024, CUB.", name=run_name)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() and not args.cpu_only else "cpu")
@@ -118,7 +129,7 @@ test_path = "data/test"
 test_images = []
 for i in range(len(os.listdir(test_path))):
     with Image.open(f"{test_path}/{i}.jpg") as img:
-        test_images.append(transforms.ToTensor()(img))
+        test_images.append(TRANSFORM(img))
 
 pt_total_steps = 0
 
@@ -127,8 +138,9 @@ for epoch in trange(args.pretrain_epochs):
     model.train()
     for i, batch in enumerate(pt_dataloader):
         pt_optimizer.zero_grad()
-        rotation_preds = model(torch.flatten(batch, 0, 1).to(device))
-        target = torch.arange(batch.shape[0] * 4, device=device) % 4
+        batch = torch.flatten(batch, 0, 1).to(device)
+        rotation_preds = model(batch)
+        target = torch.arange(batch.shape[0], device=device) % 4
         
         loss = ce_loss(rotation_preds, target)
         loss.backward()
@@ -136,11 +148,12 @@ for epoch in trange(args.pretrain_epochs):
         
         pt_total_steps += 1
         
-        if i > 0 and i % 100 == 0:
+        if pt_total_steps % 40 == 0:
             wandb.log({"train_loss": loss.item()}, step=pt_total_steps)
             
             log_images_n = 4
-            grid = make_grid(batch[:log_images_n], nrow=log_images_n)
+            denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+            grid = make_grid(denormalized_images, nrow=log_images_n)
             grid_np = grid.permute(1, 2, 0).cpu().numpy()
             wandb.log({"rotations": [wandb.Image(grid_np, caption=f"Predictions: {rotation_preds.argmax(1)[:log_images_n]}")]}, step=pt_total_steps)
         
@@ -155,48 +168,56 @@ for epoch in trange(args.pretrain_epochs):
         f"{save_dir}/pt-{epoch}.pt"
     )
        
-    ft_model = models.resnet18(num_classes=10)
-    ft_model.load_state_dict(model.state_dict())
-    ft_model = ft_model.to(device)
-    ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate, momentum=0.9, weight_decay=args.weight_decay)
-    ft_model.train()
-    for (batch, target) in ft_dataloader:
-        pt_optimizer.zero_grad()
-        
-        class_preds = model(batch.to(device))
-        
-        loss = ce_loss(class_preds, target.to(device))
-        loss.backward()
-        ft_optimizer.step()
-        
-    ft_model.eval()
-    correct_pred_cnt = 0
-    with torch.no_grad():
+    for lr_multiplier in [1, 0.1, 0.01]:
+        ft_model = models.resnet18(num_classes=10)
+        ft_model.load_state_dict(model.state_dict())
+        ft_model = ft_model.to(device)
+        ft_learning_rate = lr_multiplier * args.ft_learning_rate
+        ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=ft_learning_rate, momentum=0.9)
+        ft_model.train()
         for (batch, target) in ft_dataloader:
-            class_preds = ft_model(batch.to(device))
-            correct_pred_cnt += torch.sum(class_preds.argmax(-1) == target.to(device))
-    
-        log_images_n = 8
-        grid = make_grid(batch[:log_images_n], nrow=log_images_n)
-        grid_np = grid.permute(1, 2, 0).cpu().numpy()
-        class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(-1)[:log_images_n]]
-        wandb.log({"test_images": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, step=pt_total_steps)    
-        
-    wandb.log({"ft_accuracy": correct_pred_cnt / len(ft_dataset)}, step=pt_total_steps) 
-    
-    test_preds = []
-    with torch.no_grad():
-        for i, image in enumerate(test_images):
-            pred_idx = ft_model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
-            test_preds.append((f"{i}.jpg", CLASS_NAMES[pred_idx]))
+            ft_optimizer.zero_grad()
             
-    with open(f"{save_dir}/test-{epoch}.csv", mode='w', newline='') as file:
-        writer = csv.writer(file)
+            class_preds = ft_model(batch.to(device))
+            
+            loss = ce_loss(class_preds, target.to(device))
+            loss.backward()
+            ft_optimizer.step()
+            
+        ft_model.eval()
+        correct_pred_cnt = 0
+        with torch.no_grad():
+            for (batch, target) in ft_dataloader:
+                class_preds = ft_model(batch.to(device))
+                print(class_preds.shape)
+                print(class_preds, target.shape)
+                print(class_preds.argmax(1), target)
+                correct_pred_cnt += torch.sum(class_preds.argmax(1) == target.to(device))
         
-        # Write the header
-        writer.writerow(['id', 'class'])
+        log_images_n = 8
+        denormalized_images = torch.stack([DENORMALIZE_TRANSFORM(img) for img in batch[:log_images_n]])
+        grid = make_grid(denormalized_images, nrow=log_images_n)
+        grid_np = grid.permute(1, 2, 0).cpu().numpy()
+        class_name_preds = [CLASS_NAMES[class_pred] for class_pred in class_preds.argmax(1)[:log_images_n]]
+        wandb.log(
+            {f"test_images_ftlr={format(float(ft_learning_rate), '.8f')}": [wandb.Image(grid_np, caption=f"Predictions: {class_name_preds}")]}, 
+            step=pt_total_steps
+        )    
+        wandb.log({f"ft_accuracy_ftlr={format(float(ft_learning_rate), '.8f')}": correct_pred_cnt / len(ft_dataset)}, step=pt_total_steps) 
         
-        # Write the data rows
-        writer.writerows(test_preds)
+        test_preds = []
+        with torch.no_grad():
+            for i, image in enumerate(test_images):
+                pred_idx = ft_model(image.unsqueeze(0).to(device)).squeeze(0).argmax().to("cpu")
+                test_preds.append((f"{i}.jpg", CLASS_NAMES[pred_idx]))
+                
+        with open(f"{save_dir}/test-{epoch}-ftlr={format(float(ft_learning_rate), '.8f')}.csv", mode='w', newline='') as file:
+            writer = csv.writer(file)
+            
+            # Write the header
+            writer.writerow(['id', 'class'])
+            
+            # Write the data rows
+            writer.writerows(test_preds)
     
     print(f"Spent time on {i} epoch: {time.strftime('%H:%M:%S', time.gmtime(time.time() - begin_epoch_time))}")
