@@ -207,7 +207,7 @@ for epoch in trange(args.pretrain_epochs):
     is_final_epoch = epoch + 1 == args.pretrain_epochs
     for ftlr_multiplier in [1, 0.1, 0.01]:
         ft_model = models.resnet18(num_classes=10)
-        # ft_model.load_state_dict(model.state_dict())
+        ft_model.load_state_dict(model.state_dict())
         ft_model = ft_model.to(device)
         ft_optimizer = torch.optim.SGD(ft_model.parameters(), lr=args.ft_learning_rate * ftlr_multiplier, momentum=0.9, weight_decay=args.weight_decay)
         ft_scheduler = torch.optim.lr_scheduler.ExponentialLR(ft_optimizer, gamma=args.ft_gamma)
