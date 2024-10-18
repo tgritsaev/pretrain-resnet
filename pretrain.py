@@ -108,7 +108,7 @@ parser.add_argument("--ft-epochs", default=300, type=int)
 
 parser.add_argument("-b", "--batch-size", default=128, type=int)
 parser.add_argument("-p", "--pt-learning-rate", default=0.1, type=float)
-parser.add_argument("--pt-gamma", default=0.95, type=float)
+parser.add_argument("--pt-gamma", default=0.983, type=float)
 parser.add_argument("-f", "--ft-learning-rate", default=0.1, type=float)
 parser.add_argument("--ft-gamma", default=0.99, type=float)
 parser.add_argument("--weight-decay", default=5e-4, type=float)
