@@ -2,7 +2,7 @@
 
 ## Description
 
-This repository is a solution for the 2-nd homework from the LSDL 2024 Course taught at CUB. Throughout this howework I pretrained ResNet-18 following ["UNSUPERVISED REPRESENTATION LEARNING BY PREDICTING IMAGE ROTATIONS"](https://arxiv.org/abs/1803.07728) and tested it on a classification task.
+This repository is a solution for the 2-nd homework from the LSDL 2024 Course taught at the CUB. Throughout this howework I pretrained ResNet-18 following ["UNSUPERVISED REPRESENTATION LEARNING BY PREDICTING IMAGE ROTATIONS"](https://arxiv.org/abs/1803.07728) and tested it on a classification task.
 
 See the [**full statements**](https://github.com/isadrtdinov/lsdl-cub/blob/main/week02-pretext/homework.md) and the [**report**](https://wandb.ai/tgritsaev/Pretrain%20ResNet-18,%20HW-2.%20LSDL%202024,%20CUB./reports/Report-for-homework-2-at-Large-Scale-Deep-Learning-2024-course---Vmlldzo5NzY5NTc5?accessToken=z4oq1kq4ilpu439akuxvnuc0nk1wslz94mpt8pez461w37rq2gnyb0jg6l7ikdft).
 
